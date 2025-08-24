@@ -122,6 +122,36 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 	}
 }
 
+// fastLoginHandler authenticates a user using credentials provided via
+// URL query parameters. It performs constant-time password comparison and
+// returns a JWT token if the credentials are valid. Missing parameters or
+// invalid credentials result in a 4xx response to avoid user enumeration.
+// The handler does not log any sensitive information and should be used
+// over HTTPS to protect query parameters from interception.
+func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
+	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+		username := r.URL.Query().Get("user")
+		password := r.URL.Query().Get("password")
+		if username == "" || password == "" {
+			return http.StatusBadRequest, nil
+		}
+
+		u, err := d.store.Users.Get(d.server.Root, username)
+		if err != nil {
+			if errors.Is(err, fbErrors.ErrNotExist) {
+				return http.StatusForbidden, nil
+			}
+			return http.StatusInternalServerError, err
+		}
+
+		if !users.CheckPwd(password, u.Password) {
+			return http.StatusForbidden, nil
+		}
+
+		return printToken(w, r, d, u, tokenExpireTime)
+	}
+}
+
 type signupBody struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
