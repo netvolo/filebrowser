@@ -1,0 +1,117 @@
+# Build & Release for a Go project
+# - CI on push/PR to master
+# - Auto-release on push to master (tag "latest")
+name: Go CI & Release
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    name: Build & Test (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Derive APP_NAME from repo
+        run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Go mod download
+        run: go mod download
+
+      - name: Test
+        run: go test -v ./...
+
+      - name: Build (single or multiple cmds)
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          has_cmd_dirs=false
+          if [ -d "cmd" ]; then
+            if ls -d cmd/*/ >/dev/null 2>&1; then
+              has_cmd_dirs=true
+            fi
+          fi
+
+          if $has_cmd_dirs; then
+            echo "Detected multiple commands under ./cmd; building each."
+            for d in cmd/*/; do
+              name=$(basename "$d")
+              out="dist/${name}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+              go build -trimpath -ldflags "-s -w" -o "$out" "./cmd/${name}"
+            done
+          else
+            out="dist/${APP_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+            go build -trimpath -ldflags "-s -w" -o "$out" .
+          fi
+
+      - name: Upload artifact (${{ matrix.goos }}-${{ matrix.goarch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*${{ matrix.ext }}
+
+  release:
+    name: Auto Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Derive APP_NAME from repo
+        run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > "${APP_NAME}_checksums.txt"
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest Build"
+          body: "Release built from commit ${{ github.sha }} on branch ${{ github.ref_name }}"
+          draft: false
+          prerelease: true
+          files: |
+            dist/*
