@@ -147,27 +147,8 @@ func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 		if !users.CheckPwd(password, u.Password) {
 			return http.StatusForbidden, nil
 		}
-		signed, err := issueToken(u, d.settings.Key, tokenExpireTime)
-		if err != nil {
-			return http.StatusInternalServerError, err
-		}
 
-		http.SetCookie(w, &http.Cookie{
-			Name:     "auth",
-			Value:    signed,
-			Path:     "/",
-			Expires:  time.Now().Add(tokenExpireTime),
-			HttpOnly: true,
-			Secure:   r.TLS != nil,
-			SameSite: http.SameSiteLaxMode,
-		})
-
-		redirectURL := "/"
-		if d.server.BaseURL != "" {
-			redirectURL = d.server.BaseURL
-		}
-		http.Redirect(w, r, redirectURL, http.StatusFound)
-		return 0, nil
+		return printToken(w, r, d, u, tokenExpireTime)
 	}
 }
 
