@@ -41,25 +41,48 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.20'
 
       - name: Derive APP_NAME from repo
         run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
-      - name: Go mod download (optional but faster builds)
+      - name: Go mod download
         run: go mod download
 
-      - name: Build
+      - name: Test
+        run: go test -v ./...
+
+      - name: Build (handles single main or multiple cmd/*)
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
+          set -euo pipefail
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w" -o "dist/${APP_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" ./...
 
-      - name: Test
-        run: go test -v ./...
+          has_cmd_dirs=false
+          if [ -d "cmd" ]; then
+            # Detect at least one subdir in cmd/
+            if ls -d cmd/*/ >/dev/null 2>&1; then
+              has_cmd_dirs=true
+            fi
+          fi
+
+          if $has_cmd_dirs; then
+            echo "Detected multiple commands under ./cmd; building each."
+            for d in cmd/*/; do
+              name=$(basename "$d")
+              out="dist/${name}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+              echo "-> go build ./cmd/${name} -> ${out}"
+              go build -trimpath -ldflags "-s -w" -o "$out" "./cmd/${name}"
+            done
+          else
+            echo "Building single main package at repo root."
+            out="dist/${APP_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+            echo "-> go build . -> ${out}"
+            go build -trimpath -ldflags "-s -w" -o "$out" .
+          fi
 
       - name: Upload artifact (${{ matrix.goos }}-${{ matrix.goarch }})
         uses: actions/upload-artifact@v4
@@ -70,7 +93,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')   # run only on tag push
+    if: startsWith(github.ref, 'refs/tags/')   # run only on tag push (v*)
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create releases
@@ -87,8 +110,8 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
+          find . -type f -maxdepth 1 -printf "%f\n" | sort
           sha256sum * > "${APP_NAME}_checksums.txt"
-          ls -la
 
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
