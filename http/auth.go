@@ -217,7 +217,7 @@ func renewHandler(tokenExpireTime time.Duration) handleFunc {
 	})
 }
 
-func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
+func issueToken(user *users.User, key []byte, tokenExpirationTime time.Duration) (string, error) {
 	claims := &authToken{
 		User: userInfo{
 			ID:           user.ID,
@@ -239,7 +239,11 @@ func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.Use
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(d.settings.Key)
+	return token.SignedString(key)
+}
+
+func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
+	signed, err := issueToken(user, d.settings.Key, tokenExpirationTime)
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
