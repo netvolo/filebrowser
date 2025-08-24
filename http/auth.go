@@ -148,6 +148,7 @@ func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusForbidden, nil
 		}
 
+		// Version finale (master) : renvoyer simplement le token en clair.
 		return printToken(w, r, d, u, tokenExpireTime)
 	}
 }
