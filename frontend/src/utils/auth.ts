@@ -69,6 +69,8 @@ export async function renew(jwt?: string) {
     credentials: "same-origin",
   });
 
+  const body = await res.text();
+
   if (res.status === 200) {
     parseToken(body);
   } else {
