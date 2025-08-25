@@ -1,11 +1,14 @@
-# Build & Release for a Go project
+# Build & Release for a Go + Vue project (File Browser-like)
 # - CI on push/PR to master
-# - Auto-release on push to master (tag "latest")
+# - Auto "latest" release on push to master
+# - Versioned release on tag push v*
 name: Go CI & Release
 
 on:
   push:
     branches: [ "master" ]
+    tags:
+      - "v*"          # ex: v1.0.0
   pull_request:
     branches: [ "master" ]
 
@@ -32,14 +35,39 @@ jobs:
           - goos: darwin
             goarch: arm64
             ext: ""
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---------- FRONTEND (Vue) ----------
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: 'frontend/pnpm-lock.yaml'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm run build
+      # => produit frontend/dist qui sera embarqué par Go via embed.FS
+
+      # ---------- BACKEND (Go) ----------
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          cache: true
 
       - name: Derive APP_NAME from repo
         run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
@@ -50,7 +78,7 @@ jobs:
       - name: Test
         run: go test -v ./...
 
-      - name: Build (single or multiple cmds)
+      - name: Build binaries (single main or multiple cmd/*)
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
@@ -59,6 +87,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
 
+          # Si le projet a plusieurs commandes dans ./cmd/*, on les build toutes.
           has_cmd_dirs=false
           if [ -d "cmd" ]; then
             if ls -d cmd/*/ >/dev/null 2>&1; then
@@ -71,10 +100,14 @@ jobs:
             for d in cmd/*/; do
               name=$(basename "$d")
               out="dist/${name}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+              echo "-> go build ./cmd/${name} -> ${out}"
               go build -trimpath -ldflags "-s -w" -o "$out" "./cmd/${name}"
             done
           else
+            echo "Building single main package at repo root."
             out="dist/${APP_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+            echo "-> go build . -> ${out}"
+            # IMPORTANT: on build la racine (.) pour embarquer frontend/dist (embed.FS)
             go build -trimpath -ldflags "-s -w" -o "$out" .
           fi
 
@@ -84,9 +117,11 @@ jobs:
           name: ${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*${{ matrix.ext }}
 
-  release:
-    name: Auto Release
+  # ----------- "LATEST" release on push to master -----------
+  release_latest:
+    name: Create/Update Latest Release
     needs: build
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -105,13 +140,49 @@ jobs:
           cd dist
           sha256sum * > "${APP_NAME}_checksums.txt"
 
-      - name: Create GitHub Release and upload assets
-        uses: softprops/action-gh-release@v2
+      - name: Create/Update 'latest' release (replace assets)
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: latest
+          tag: latest
           name: "Latest Build"
-          body: "Release built from commit ${{ github.sha }} on branch ${{ github.ref_name }}"
-          draft: false
+          body: "Automated build from commit ${{ github.sha }} on branch ${{ github.ref_name }}."
           prerelease: true
-          files: |
-            dist/*
+          allowUpdates: true
+          replacesArtifacts: true
+          artifactErrorsFailBuild: true
+          artifacts: "dist/*"
+
+  # ----------- Versioned release on tag v* -----------
+  release_versioned:
+    name: Create Versioned Release (tag)
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Derive APP_NAME from repo
+        run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > "${APP_NAME}_checksums.txt"
+
+      - name: Create versioned release (tag ${{ github.ref_name }})
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: "${{ github.ref_name }}"
+          body: "Automated build for ${{ github.ref_name }} (commit ${{ github.sha }})."
+          prerelease: false
+          allowUpdates: true
+          replacesArtifacts: true
+          artifactErrorsFailBuild: true
+          artifacts: "dist/*"
