@@ -117,17 +117,19 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 		case err != nil:
 			return http.StatusInternalServerError, err
 		}
-
-		return printToken(w, r, d, user, tokenExpireTime)
+		signed, err := issueToken(user, d.settings.Key, tokenExpireTime)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		setAuthCookie(w, r, signed, tokenExpireTime)
+		w.WriteHeader(http.StatusNoContent)
+		return 0, nil
 	}
 }
 
-// fastLoginHandler authenticates a user using credentials provided via
-// URL query parameters. It performs constant-time password comparison and
-// returns a JWT token if the credentials are valid. Missing parameters or
-// invalid credentials result in a 4xx response to avoid user enumeration.
-// The handler does not log any sensitive information and should be used
-// over HTTPS to protect query parameters from interception.
+// fastLoginHandler authentifie via paramètres d’URL ?user=&password=
+// Compare le mot de passe en temps constant et, en cas de succès,
+// émet un JWT et le place dans un cookie HttpOnly.
 func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		username := r.URL.Query().Get("user")
@@ -147,10 +149,26 @@ func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 		if !users.CheckPwd(password, u.Password) {
 			return http.StatusForbidden, nil
 		}
-
-		// Version finale (master) : renvoyer simplement le token en clair.
-		return printToken(w, r, d, u, tokenExpireTime)
+		signed, err := issueToken(u, d.settings.Key, tokenExpireTime)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		setAuthCookie(w, r, signed, tokenExpireTime)
+		w.WriteHeader(http.StatusNoContent)
+		return 0, nil
 	}
+}
+
+func setAuthCookie(w http.ResponseWriter, r *http.Request, token string, exp time.Duration) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth",
+		Value:    token,
+		Path:     "/",
+		Expires:  time.Now().Add(exp),
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 type signupBody struct {
@@ -214,7 +232,13 @@ var signupHandler = func(_ http.ResponseWriter, r *http.Request, d *data) (int, 
 func renewHandler(tokenExpireTime time.Duration) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		w.Header().Set("X-Renew-Token", "false")
-		return printToken(w, r, d, d.user, tokenExpireTime)
+		signed, err := issueToken(d.user, d.settings.Key, tokenExpireTime)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		setAuthCookie(w, r, signed, tokenExpireTime)
+		w.WriteHeader(http.StatusNoContent)
+		return 0, nil
 	})
 }
 
@@ -241,17 +265,4 @@ func issueToken(user *users.User, key []byte, tokenExpirationTime time.Duration)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(key)
-}
-
-func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
-	signed, err := issueToken(user, d.settings.Key, tokenExpirationTime)
-	if err != nil {
-		return http.StatusInternalServerError, err
-	}
-
-	w.Header().Set("Content-Type", "text/plain")
-	if _, err := w.Write([]byte(signed)); err != nil {
-		return http.StatusInternalServerError, err
-	}
-	return 0, nil
 }
