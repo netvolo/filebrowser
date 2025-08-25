@@ -154,7 +154,12 @@ func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusInternalServerError, err
 		}
 		setAuthCookie(w, r, signed, tokenExpireTime)
-		w.WriteHeader(http.StatusNoContent)
+
+		redirect := r.URL.Query().Get("redirect")
+		if redirect == "" {
+			redirect = "/"
+		}
+		http.Redirect(w, r, redirect, http.StatusFound)
 		return 0, nil
 	}
 }
