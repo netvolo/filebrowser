@@ -122,8 +122,13 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusInternalServerError, err
 		}
 		setAuthCookie(w, r, signed, tokenExpireTime)
-		w.WriteHeader(http.StatusNoContent)
-		return 0, nil
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if _, err = w.Write([]byte(signed)); err != nil {
+			return http.StatusInternalServerError, err
+		}
+
+		return http.StatusOK, nil
 	}
 }
 
