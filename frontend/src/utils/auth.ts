@@ -56,15 +56,16 @@ export async function login(
   }
 }
 
-export async function renew(jwt: string) {
+export async function renew(jwt?: string) {
+  const headers: Record<string, string> = {};
+  if (jwt) {
+    headers["X-Auth"] = jwt;
+  }
   const res = await fetch(`${baseURL}/api/renew`, {
-    method: "POST",
-    headers: {
-      "X-Auth": jwt,
-    },
+    method: "GET",
+    headers,
+    credentials: "same-origin",
   });
-
-  const body = await res.text();
 
   if (res.status === 200) {
     parseToken(body);
