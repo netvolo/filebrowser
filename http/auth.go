@@ -122,21 +122,14 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusInternalServerError, err
 		}
 		setAuthCookie(w, r, signed, tokenExpireTime)
-		w.Header().Set("Content-Type", "text/plain")
-		if _, err := w.Write([]byte(signed)); err != nil {
-			return http.StatusInternalServerError, err
-		}
+		w.WriteHeader(http.StatusNoContent)
 		return 0, nil
 	}
 }
 
-// fastLoginHandler authenticates a user using credentials provided via
-// URL query parameters. It performs constant-time password comparison and
-// on success issues a JWT stored in an "auth" cookie before redirecting to
-// the root. Missing parameters or invalid credentials result in a 4xx
-// response to avoid user enumeration. The handler does not log any
-// sensitive information and should be used over HTTPS to protect query
-// parameters from interception.
+// fastLoginHandler authentifie via paramètres d’URL ?user=&password=
+// Compare le mot de passe en temps constant et, en cas de succès,
+// émet un JWT et le place dans un cookie HttpOnly.
 func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		username := r.URL.Query().Get("user")
@@ -161,7 +154,7 @@ func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusInternalServerError, err
 		}
 		setAuthCookie(w, r, signed, tokenExpireTime)
-		http.Redirect(w, r, "/", http.StatusFound)
+		w.WriteHeader(http.StatusNoContent)
 		return 0, nil
 	}
 }
@@ -203,7 +196,17 @@ var signupHandler = func(_ http.ResponseWriter, r *http.Request, d *data) (int, 
 	}
 
 	user := &users.User{
-@@ -161,62 +217,62 @@ var signupHandler = func(_ http.ResponseWriter, r *http.Request, d *data) (int,
+		Username: info.Username,
+	}
+
+	d.settings.Defaults.Apply(user)
+
+	pwd, err := users.ValidateAndHashPwd(info.Password, d.settings.MinimumPasswordLength)
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
+
+	user.Password = pwd
 	if d.settings.CreateUserDir {
 		user.Scope = ""
 	}
@@ -234,10 +237,7 @@ func renewHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusInternalServerError, err
 		}
 		setAuthCookie(w, r, signed, tokenExpireTime)
-		w.Header().Set("Content-Type", "text/plain")
-		if _, err := w.Write([]byte(signed)); err != nil {
-			return http.StatusInternalServerError, err
-		}
+		w.WriteHeader(http.StatusNoContent)
 		return 0, nil
 	})
 }
@@ -265,3 +265,4 @@ func issueToken(user *users.User, key []byte, tokenExpirationTime time.Duration)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(key)
+}
