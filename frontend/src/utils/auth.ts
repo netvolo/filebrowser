@@ -22,6 +22,8 @@ export async function validateLogin() {
   try {
     if (localStorage.getItem("jwt")) {
       await renew(<string>localStorage.getItem("jwt"));
+    } else if (document.cookie.split("; ").some((c) => c.startsWith("auth="))) {
+      await renew();
     }
   } catch (error) {
     console.warn("Invalid JWT token in storage");
