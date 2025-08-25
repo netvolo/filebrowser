@@ -22,6 +22,8 @@ export async function validateLogin() {
   try {
     if (localStorage.getItem("jwt")) {
       await renew(<string>localStorage.getItem("jwt"));
+    } else if (document.cookie.split("; ").some((c) => c.startsWith("auth="))) {
+      await renew();
     }
   } catch (error) {
     console.warn("Invalid JWT token in storage");
@@ -56,12 +58,15 @@ export async function login(
   }
 }
 
-export async function renew(jwt: string) {
+export async function renew(jwt?: string) {
+  const headers: Record<string, string> = {};
+  if (jwt) {
+    headers["X-Auth"] = jwt;
+  }
   const res = await fetch(`${baseURL}/api/renew`, {
-    method: "POST",
-    headers: {
-      "X-Auth": jwt,
-    },
+    method: "GET",
+    headers,
+    credentials: "same-origin",
   });
 
   const body = await res.text();
