@@ -153,6 +153,7 @@ func fastLoginHandler(tokenExpireTime time.Duration) handleFunc {
 		if !users.CheckPwd(password, u.Password) {
 			return http.StatusForbidden, nil
 		}
+
 		signed, err := issueToken(u, d.settings.Key, tokenExpireTime)
 		if err != nil {
 			return http.StatusInternalServerError, err

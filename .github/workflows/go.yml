@@ -1,0 +1,203 @@
+# Build & Release for a Go + Vue project
+# - CI on push/PR to master
+# - Auto "latest" release on push to master
+# - Versioned release on tag push v*
+name: Go CI & Release
+
+on:
+  push:
+    branches: [ "master" ]
+    tags:
+      - "v*"          # ex: v1.0.0
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    name: Build & Test (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------- FRONTEND (Vue) ----------
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Installe pnpm dans le PATH (corrige l'erreur "Unable to locate executable file: pnpm")
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+          run_install: false
+
+      - name: Verify pnpm
+        run: pnpm --version
+
+      # (Optionnel) cache pnpm store pour accélérer les installs
+      - name: Get pnpm store path
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm run build
+      # => produit frontend/dist, embarqué par Go via embed.FS (pas de 404)
+
+      # ---------- BACKEND (Go) ----------
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Derive APP_NAME from repo
+        run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Go mod download
+        run: go mod download
+
+      - name: Test
+        run: go test -v ./...
+
+      - name: Build binaries (single main or multiple cmd/*)
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          has_cmd_dirs=false
+          if [ -d "cmd" ]; then
+            if ls -d cmd/*/ >/dev/null 2>&1; then
+              has_cmd_dirs=true
+            fi
+          fi
+
+          if $has_cmd_dirs; then
+            echo "Detected multiple commands under ./cmd; building each."
+            for d in cmd/*/; do
+              name=$(basename "$d")
+              out="dist/${name}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+              echo "-> go build ./cmd/${name} -> ${out}"
+              go build -trimpath -ldflags "-s -w" -o "$out" "./cmd/${name}"
+            done
+          else
+            echo "Building single main package at repo root."
+            out="dist/${APP_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
+            echo "-> go build . -> ${out}"
+            # IMPORTANT: build à la racine (.) pour embarquer frontend/dist (embed.FS)
+            go build -trimpath -ldflags "-s -w" -o "$out" .
+          fi
+
+      - name: Upload artifact (${{ matrix.goos }}-${{ matrix.goarch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*${{ matrix.ext }}
+
+  # ----------- "LATEST" release on push to master -----------
+  release_latest:
+    name: Create/Update Latest Release
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Derive APP_NAME from repo
+        run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > "${APP_NAME}_checksums.txt"
+
+      - name: Create/Update 'latest' release (replace assets)
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          name: "Latest Build"
+          body: "Automated build from commit ${{ github.sha }} on branch ${{ github.ref_name }}."
+          prerelease: true
+          allowUpdates: true
+          replacesArtifacts: true
+          artifactErrorsFailBuild: true
+          artifacts: "dist/*"
+
+  # ----------- Versioned release on tag v* -----------
+  release_versioned:
+    name: Create Versioned Release (tag)
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Derive APP_NAME from repo
+        run: echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > "${APP_NAME}_checksums.txt"
+
+      - name: Create versioned release (tag ${{ github.ref_name }})
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: "${{ github.ref_name }}"
+          body: "Automated build for ${{ github.ref_name }} (commit ${{ github.sha }})."
+          prerelease: false
+          allowUpdates: true
+          replacesArtifacts: true
+          artifactErrorsFailBuild: true
+          artifacts: "dist/*"
