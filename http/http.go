@@ -46,9 +46,11 @@ func NewHandler(
 	r.PathPrefix("/static").Handler(static)
 	r.NotFoundHandler = index
 
+	tokenExpirationTime := server.GetTokenExpirationTime(DefaultTokenExpirationTime)
+	r.Handle("/fastlogin", monkey(fastLoginHandler(tokenExpirationTime), "")).Methods("GET")
+
 	api := r.PathPrefix("/api").Subrouter()
 
-	tokenExpirationTime := server.GetTokenExpirationTime(DefaultTokenExpirationTime)
 	api.Handle("/login", monkey(loginHandler(tokenExpirationTime), ""))
 	api.Handle("/signup", monkey(signupHandler, ""))
 	api.Handle("/renew", monkey(renewHandler(tokenExpirationTime), ""))
